@@ -1,34 +1,31 @@
+import azure.functions as func
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from azure.ai.inference import ChatCompletionsClient
 from azure.ai.inference.models import SystemMessage, UserMessage
 from azure.core.credentials import AzureKeyCredential
-from dotenv import load_dotenv
 import os
 import PyPDF2
 import docx
 import io
 import re
 
-# Cargar variables de entorno
-load_dotenv()
-
-# Configuración de Azure AI Foundry
+# Cargar variables de entorno desde Azure Function App
 endpoint = os.getenv("AZURE_INFERENCE_SDK_ENDPOINT")
 model_name = os.getenv("DEPLOYMENT_NAME")
 key = os.getenv("AZURE_INFERENCE_SDK_KEY")
 
-if not endpoint or not key:
-    raise ValueError("Faltan credenciales de Azure AI Inference en el archivo .env")
+if not endpoint or not key or not model_name:
+    raise ValueError("Faltan credenciales de Azure AI Inference en las variables de entorno.")
 
 client = ChatCompletionsClient(endpoint=endpoint, credential=AzureKeyCredential(key))
 
 app = FastAPI()
 
-# ✅ CORS: Solo permitir solicitudes desde el frontend en Azure
+# CORS para la Static Web App
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Reemplazar con tu URL real
+    allow_origins=["*"],  # Cambia esto en producción
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,23 +33,25 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"message": "Bienvenido a la API de DeepSeek"}
+    return {"message": "Bienvenido a la API de DeepSeek en Azure Functions"}
 
-# ✅ Función para extraer texto de diferentes formatos de archivo
 def extract_text_from_file(file: UploadFile) -> str:
+    """ Extrae el texto de un archivo PDF, DOCX o TXT. """
     try:
-        content = io.BytesIO(file.file.read())  # Leer en memoria
-        file.file.seek(0)  # Restablecer cursor
+        content = io.BytesIO(file.file.read())
+        file.file.seek(0)
 
-        if file.filename.endswith(".pdf"):
+        ext = file.filename.lower().split(".")[-1]
+
+        if ext == "pdf":
             pdf_reader = PyPDF2.PdfReader(content)
             return " ".join([page.extract_text() or "" for page in pdf_reader.pages])
 
-        elif file.filename.endswith(".docx"):
+        elif ext == "docx":
             doc = docx.Document(content)
             return " ".join([para.text for para in doc.paragraphs])
 
-        elif file.filename.endswith(".txt"):
+        elif ext == "txt":
             return content.getvalue().decode("utf-8")
 
         else:
@@ -61,9 +60,9 @@ def extract_text_from_file(file: UploadFile) -> str:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al extraer texto: {str(e)}")
 
-# ✅ Endpoint corregido para procesar archivos
 @app.post("/process-file/")
 async def process_file(file: UploadFile = File(...)):
+    """ Procesa un archivo, extrae su texto y lo resume usando Azure AI. """
     try:
         file_text = extract_text_from_file(file)
 
@@ -76,24 +75,22 @@ async def process_file(file: UploadFile = File(...)):
             max_tokens=500
         )
 
-        raw_summary = response.choices[0].message.content
+        summary = response.choices[0].message.content.strip()
+        summary = re.sub(r"<think>.*?</think>", "", summary, flags=re.DOTALL).strip()
 
-        # ✅ Eliminar etiquetas <think>...</think>
-        cleaned_summary = re.sub(r"<think>.*?</think>", "", raw_summary, flags=re.DOTALL).strip()
-
-        if not cleaned_summary:
+        if not summary:
             raise HTTPException(status_code=500, detail="No se pudo extraer un resumen válido.")
 
-        return {"summary": cleaned_summary}
+        return {"summary": summary}
 
     except HTTPException:
-        raise  # Dejar pasar los errores HTTP tal cual
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al procesar el archivo: {str(e)}")
 
-# ✅ Chat Endpoint corregido
 @app.post("/chat")
 async def chat_with_ai(user_input: dict):
+    """ Recibe un mensaje del usuario y devuelve la respuesta del modelo IA. """
     try:
         user_message = user_input.get("message", "").strip()
         if not user_message:
@@ -108,14 +105,12 @@ async def chat_with_ai(user_input: dict):
             max_tokens=500
         )
 
-        return {"response": response.choices[0].message.content}
+        return {"response": response.choices[0].message.content.strip()}
 
     except HTTPException:
-        raise  # Dejar pasar errores HTTP sin cambios
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en el chat: {str(e)}")
 
-# ✅ Ejecución de FastAPI en modo local
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# Adaptar FastAPI a Azure Functions
+app_handler = func.AsgiFunctionApp(app)
