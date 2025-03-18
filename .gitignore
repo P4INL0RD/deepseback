@@ -1,0 +1,33 @@
+# Ignorar entorno virtual
+venv/
+.env
+
+# Archivos compilados de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos de dependencias
+*.log
+pip-log.txt
+
+# Configuración de VSCode
+.vscode/
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Archivos temporales
+*.tmp
+
+
+
+# Caché de Python
+*.egg-info/
+.eggs/
+
+# Subida accidental de claves o credenciales
+config.json
+secrets.json
